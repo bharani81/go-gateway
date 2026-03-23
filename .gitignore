@@ -1,0 +1,29 @@
+# Binaries
+/bin/
+/dist/
+*.exe
+*.out
+
+# Go generated files
+vendor/
+
+# Environment and secrets
+.env
+*.pem
+*.key
+*.crt
+
+# Editor and OS artifacts
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Test and coverage artifacts
+*.test
+coverage.out
+coverage.html
+
+# Build artifacts
+api-gateway
+gateway
