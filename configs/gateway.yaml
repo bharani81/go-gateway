@@ -1,0 +1,136 @@
+gateway:
+  port: 8080
+  global_timeout: 30s
+
+  # Load shedding: reject new requests when > 1000 are already in-flight.
+  # Rejected requests receive 503 + Retry-After: 1 immediately (no queuing).
+  max_concurrent_requests: 1000
+
+  timeouts:
+    read_header: 5s
+    read: 10s
+    write: 30s
+    idle: 90s
+
+  tls:
+    enabled: false
+    # cert_file: /etc/gateway/tls/tls.crt
+    # key_file:  /etc/gateway/tls/tls.key
+
+# ─── Services ────────────────────────────────────────────────────────────────
+# Each service maps to one or more upstream hosts.
+# lb_strategy: "round-robin" | "random"
+services:
+  - name: user-service
+    lb_strategy: round-robin
+    health_check:
+      path: /health
+      interval: 10s
+      timeout: 3s
+      failure_threshold: 3
+      success_threshold: 2
+    # Per-service connection pool tuning.
+    # High-throughput services should increase max_idle_conns_per_host.
+    transport:
+      max_idle_conns: 200
+      max_idle_conns_per_host: 20
+      idle_conn_timeout: 90s
+      tls_handshake_timeout: 10s
+    instances:
+      - id: user-svc-1
+        address: "localhost:8081"
+      - id: user-svc-2
+        address: "localhost:8082"
+
+  - name: order-service
+    lb_strategy: random
+    health_check:
+      path: /health
+      interval: 15s
+      timeout: 3s
+      failure_threshold: 3
+      success_threshold: 2
+    transport:
+      max_idle_conns: 100
+      max_idle_conns_per_host: 10
+      idle_conn_timeout: 90s
+    instances:
+      - id: order-svc-1
+        address: "localhost:9001"
+
+# ─── Named Plugin Definitions ─────────────────────────────────────────────────
+# Top-level registry: maps a name to a built-in type.
+# Routes reference these by name and supply per-route config.
+plugins:
+  - name: logger
+    type: builtin.logger
+
+  - name: jwt-auth
+    type: builtin.jwt-auth
+
+  - name: cors
+    type: builtin.cors
+
+  - name: rate-limiter
+    type: builtin.rate-limit
+
+# ─── Routes ──────────────────────────────────────────────────────────────────
+# match_type: "exact" | "prefix" | "regex"
+# plugins: ordered by `order` field; duplicate orders are a validation error.
+routes:
+  - id: get-users
+    methods: [GET, HEAD]
+    path: /api/v1/users
+    match_type: prefix
+    service: user-service
+    timeout: 10s
+    max_body_bytes: 1048576  # 1MB
+    plugins:
+      - name: logger
+        order: 1
+      - name: cors
+        order: 2
+        config:
+          allowed_origins: ["https://app.example.com"]
+          allowed_methods: [GET, POST, OPTIONS]
+          allowed_headers: [Content-Type, Authorization]
+          allow_credentials: true
+      - name: rate-limiter
+        order: 3
+        config:
+          strategy: per-ip
+          requests_per_minute: 120
+          burst: 20
+      - name: jwt-auth
+        order: 4
+        config:
+          auth_model: hybrid
+          algorithms: [HS256]
+          secret: "${JWT_SECRET}"   # inject via environment variable
+          issuer: "https://auth.example.com"
+          forward_claims: [sub, roles, org_id]
+
+  - id: create-order
+    methods: [POST]
+    path: /api/v1/orders
+    match_type: exact
+    service: order-service
+    timeout: 15s
+    max_body_bytes: 10485760  # 10MB
+    plugins:
+      - name: logger
+        order: 1
+      - name: jwt-auth
+        order: 2
+        config:
+          auth_model: validate
+          algorithms: [HS256]
+          secret: "${JWT_SECRET}"
+          issuer: "https://auth.example.com"
+          forward_claims: [sub]
+      - name: rate-limiter
+        order: 3
+        config:
+          strategy: per-user
+          requests_per_minute: 30
+          burst: 5
