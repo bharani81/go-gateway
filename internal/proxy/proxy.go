@@ -3,7 +3,6 @@
 package proxy
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -33,8 +32,8 @@ var retryableStatusCodes = map[int]bool{
 
 // ReverseProxy forwards requests to an upstream instance and handles retries.
 type ReverseProxy struct {
-	transports   *TransportRegistry
-	log          *zap.Logger
+	transports *TransportRegistry
+	log        *zap.Logger
 }
 
 // New creates a ReverseProxy.
