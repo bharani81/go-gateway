@@ -24,12 +24,10 @@ import (
 type RateLimitPlugin struct {
 	strategy string // per-ip | per-user
 	limiter  *ratelimit.TokenBucket
-	routeID  string
 }
 
 // NewRateLimitPlugin constructs a RateLimitPlugin from route-level config.
-func NewRateLimitPlugin(routeID string) func(map[string]interface{}) (*RateLimitPlugin, error) {
-	return func(cfg map[string]interface{}) (*RateLimitPlugin, error) {
+func NewRateLimitPlugin(cfg map[string]interface{}) (pluginpkg.Plugin, error) {
 		rpm := 60.0 // default: 60 requests per minute
 		burst := 10.0
 		strategy := "per-ip"
@@ -50,9 +48,7 @@ func NewRateLimitPlugin(routeID string) func(map[string]interface{}) (*RateLimit
 		return &RateLimitPlugin{
 			strategy: strategy,
 			limiter:  ratelimit.New(ratePerSec, burst),
-			routeID:  routeID,
 		}, nil
-	}
 }
 
 func (p *RateLimitPlugin) Name() string { return "rate-limit" }
@@ -86,10 +82,15 @@ func (p *RateLimitPlugin) ExecuteResponse(_ http.ResponseWriter, _ *http.Request
 
 // bucketKey builds the limiter key from the client's IP or user ID.
 func (p *RateLimitPlugin) bucketKey(r *http.Request) string {
+	routeID := "unknown"
+	if gwCtx := gwctx.From(r.Context()); gwCtx != nil && gwCtx.RouteID != "" {
+		routeID = gwCtx.RouteID
+	}
+
 	switch p.strategy {
 	case "per-user":
 		if gwCtx := gwctx.From(r.Context()); gwCtx != nil && gwCtx.UserID != "" {
-			return fmt.Sprintf("%s:user:%s", p.routeID, gwCtx.UserID)
+			return fmt.Sprintf("%s:user:%s", routeID, gwCtx.UserID)
 		}
 		// Fall through to per-IP if user ID is not available.
 		fallthrough
@@ -102,7 +103,7 @@ func (p *RateLimitPlugin) bucketKey(r *http.Request) string {
 				ip = ip[:idx]
 			}
 		}
-		return fmt.Sprintf("%s:ip:%s", p.routeID, ip)
+		return fmt.Sprintf("%s:ip:%s", routeID, ip)
 	}
 }
 
