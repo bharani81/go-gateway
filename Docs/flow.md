@@ -1,6 +1,6 @@
 # Request Lifecycle Flow
 
-This document outlines the step-by-step lifecycle of a request as it enters and traverses the API Gateway.
+This document details the complete step-by-step lifecycle of a request as it enters and traverses the API Gateway.
 
 ## High-Level Flow Visualization
 
@@ -44,29 +44,100 @@ The gateway looks at its active, atomically hot-swappable `GatewayRuntime` Radix
 - Resolves the destined upstream logical `Service` target and the localized `Plugin Chain` meant for this route.
 
 ### 4. Plugin Chain Execution
-Plugins execute sequentially based on their `order` configuration. If any plugin throws an `AbortError`, the chain breaks, returning immediately to the client (e.g. throwing `429 Too Many Requests`).
+Plugins execute sequentially based on their `order` configuration. If any plugin throws an `AbortError`, the chain breaks, returning immediately to the client (e.g., throwing `429 Too Many Requests`).
 
-**Standard Ordering Flow:**
-1. **Logger:** Tracks request initialization payload parameters.
-2. **CORS:** Evaluates `OPTIONS` preflight headers and injects domain-origin assertions.
-3. **Authentication (JWT):** Decodes the Bearer token, validates the HMAC/RSA signature, and embeds the user claims natively into the `GatewayContext`.
-4. **Rate Limiting:** Utilizes the extracted User-ID from the JWT to slide the Redis limiting window. Rejects if quota is met.
-5. **External Plugins:** Reaches out to external WAFs via Sidecar IPC sockets.
+**Standard Execution Order:**
+1. Logger
+2. CORS
+3. Authentication (JWT)
+4. Rate Limiting
+5. External Plugins (Sidecars)
 
-### 5. Smart Load Balancing Decision
-If the plugins accept the payload, the request targets the `LoadBalancer`:
-- The AI Smart Router evaluates the active EWMA telemetry scores of all healthy instances mapped to the upstream service.
-- **Exploitation (90%):** Weighted algorithms favor the lowest latency, lowest error-rate nodes instantaneously.
-- **Exploration (10%):** Epsilon-greedy injection selects completely randomly to evaluate if 'dead' nodes have recovered latency.
-- It returns a target `Address` and a telemetry `done()` recording hook.
+---
 
-### 6. Reverse Proxy & Execution 
-The `ReverseProxy` attempts to open an HTTP pool stream directly to the selected `Address`:
-- Evaluates per-instance and global service **Circuit Breakers**.
-- **Retry Logic:** If the stream hits a retryable status code (`502`, `503`, `504`) or connection refusal *and* the request is idempotent (`GET`, `PUT`), it retries exponentially until the global context deadline runs out.
-- Pipes the exact `io.Reader` response body back to the client cleanly.
+## Dedicated Sub-System Flows
 
-### 7. Telemetry & Cleanup
-Once the stream concludes (or panics):
-- The telemetry `done(latency, errorStatus)` hook evaluates. The Smart Load balancer adjusts the numeric AI scores internally.
-- The `GatewayContext` dumps its final tracking arrays into the Prometheus metrics pool `gateway_request_duration_seconds`.
+### A. Auth Flow (JWT Authentication)
+The gateway abstracts user authentication away from upstream microservices using JSON Web Tokens (JWT).
+
+```text
+[Client] ──(Authorization: Bearer <Token>)──► [Gateway]
+                                                 │
+                                           [Auth Plugin]
+                                                 │
+                                     ┌───────────▼───────────┐
+                                     │ 1. Extract Token      │
+                                     │ 2. Validate Signature │
+                                     │ 3. Check Expiration   │
+                                     └───────────┬───────────┘
+                                                 │
+                          ┌──────────────────────┴──────────────────────┐
+                   [Invalid]                                          [Valid]
+                       ▼                                                ▼
+              Returns 401 Unauthorized                       Extract UserID & Claims
+                                                                        │
+                                                         Inject into GatewayContext
+                                                                        │
+                                                         Forward to Route/Service
+```
+1. **Extraction:** Retrieves the token from the `Authorization` header.
+2. **Validation:** Verifies the cryptographic signature (HMAC/RSA) using the Gateway's centralized secret keys.
+3. **Context Injection:** Strips token validation logic away from the microservice. The proxy instead forwards the `X-User-ID` natively appended as a safe header constraint utilizing data extracted internally to the `GatewayContext`.
+
+### B. Rate Limiting Flow
+Uses a distributed sliding window natively stored within Redis.
+
+```text
+[Gateway Context (Contains User-ID/IP)]
+                   │
+           [RateLimiter Plugin]
+                   │
+           ┌───────▼───────┐
+           │ Redis Lua     │ ──► [Limit Exceeded?] ──(Yes)──► Returns 429 Too Many Requests
+           │ Sliding Window│
+           └───────┬───────┘
+                   │
+                 (No)
+                   ▼
+             Pass to Upstream
+```
+
+### C. Smart Routing & AI Decision Flow
+The active AI adaptive load balancer allocates instances based on real-time feedback.
+
+```text
+[Load Balancer]
+       │
+       ▼
+ 1. Check Epsilon-Greedy (10% Traffic) ──(Triggered)──► Returns Random Upstream (Exploration)
+       │
+  (90% Traffic)
+       ▼
+ 2. Load Telemetry (Latency, Errors, Active Requests)
+       │
+ 3. Normalize arrays to [0..1] range
+       │
+ 4. Compute Linear Weights: (W1*Lat) + (W2*Err) + (W3*Load)
+       │
+ 5. Roulette Wheel Random Selection ──► Returns Selected Instance (Exploitation)
+```
+
+### D. Error Handling & Retry Flow
+The proxy engine maintains an isolated boundary to safely retry idempotent requests gracefully navigating temporary HTTP errors.
+
+```text
+[Proxy Engine] ──(HTTP Streaming)──► [Upstream Microservice]
+                                                 │
+                                  ┌──────────────┴──────────────┐
+                            [502, 503, 504]                  [200 OK]
+                                  │                             │
+                      [Is Method Idempotent?]         Stream response to Client
+                                  │                             │
+                   ┌──────────────┴──────────────┐         [done() Telemetry Hook]
+                 (Yes)                          (No)
+                   │                             │
+         [Wait Exponential Backoff]     Return Error to Client
+                   │
+         [Retry Upstream max 2x]
+```
+- **Circuit Breakers:** If the proxy persistently traps errors hitting above 50% failure rates sequentially across instances, a tripped circuit breaker isolates the backend instantly forcing explicit localized failures avoiding global execution pauses.
