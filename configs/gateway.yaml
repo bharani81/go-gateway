@@ -101,6 +101,9 @@ routes:
           strategy: per-ip
           requests_per_minute: 120
           burst: 20
+          backend: redis
+          redis_addr: "localhost:6379"
+          fallback_policy: "pass"
       - name: jwt-auth
         order: 4
         config:

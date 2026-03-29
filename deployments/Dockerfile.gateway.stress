@@ -1,0 +1,21 @@
+# Stage 1: Build
+FROM golang:1.24-alpine AS builder
+RUN adduser -D -u 1001 gateway
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build \
+    -ldflags="-s -w" \
+    -o /build/gateway \
+    ./cmd/gateway
+
+# Stage 2: Run
+FROM gcr.io/distroless/static:nonroot
+COPY --from=builder /build/gateway /gateway
+# We bake the stress config directly into the image to avoid macOS volume mount permission issues
+COPY --from=builder /build/tests/stress/gateway_stress_test.yaml /etc/gateway/gateway_stress_test.yaml
+USER nonroot:nonroot
+EXPOSE 8080 9090
+ENTRYPOINT ["/gateway", "-config", "/etc/gateway/gateway_stress_test.yaml"]

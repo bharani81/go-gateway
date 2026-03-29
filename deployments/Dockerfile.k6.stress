@@ -1,0 +1,4 @@
+FROM grafana/k6:latest
+# Bake the k6 stress script directly into the image
+COPY tests/stress/gateway.k6.js /scripts/gateway.k6.js
+ENTRYPOINT ["k6"]

@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  # Mock upstream application
+  echo-server:
+    build:
+      context: ../
+      dockerfile: deployments/Dockerfile.echo
+    ports:
+      - "8081:8081"
+    environment:
+      - PORT=8081
+
+  # The Gateway
+  gateway:
+    build:
+      context: ../
+      dockerfile: deployments/Dockerfile.gateway.stress
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    depends_on:
+      - echo-server
+
+  # k6 Load Generator
+  k6:
+    build:
+      context: ../
+      dockerfile: deployments/Dockerfile.k6.stress
+    depends_on:
+      - gateway
+      - echo-server
+    environment:
+      - GATEWAY_URL=http://gateway:8080
+    command: run /scripts/gateway.k6.js

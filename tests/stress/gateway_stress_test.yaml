@@ -1,0 +1,40 @@
+# Gateway configuration specifically for the load test
+gateway:
+  port: 8080
+  timeouts:
+    read_header: 5s
+    read: 10s
+    write: 30s
+    idle: 90s
+
+observability:
+  prometheus_port: 9090
+
+plugins:
+  - name: "jwt-auth"
+    type: "builtin.jwt-auth"
+  - name: "rate-limiter"
+    type: "builtin.rate-limit"
+
+routes:
+  - id: "users-api"
+    path: "/api/v1/users"
+    match_type: "prefix"
+    service: "users-service"
+    plugins:
+      - name: "rate-limiter"
+        order: 1
+        config:
+          requests_per_minute: 2000000 # Configured way above 1M to test pure proxy throughput
+          burst: 500000
+          backend: "memory" # In-memory limits for raw proxy speed test
+
+services:
+  - name: "users-service"
+    instances:
+      - id: "echo-1"
+        address: "http://echo-server:8081"
+  - name: "auth-service" # Simulating auth downstream if needed
+    instances:
+      - id: "echo-2"
+        address: "http://echo-server:8081"
