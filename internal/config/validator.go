@@ -38,7 +38,7 @@ func Validate(cfg *Config) error {
 		}
 		serviceNames[svc.Name] = struct{}{}
 
-		validLB := map[string]bool{"round-robin": true, "random": true, "": true}
+		validLB := map[string]bool{"round-robin": true, "random": true, "smart": true, "": true}
 		if !validLB[svc.LBStrategy] {
 			errs = append(errs, fmt.Sprintf("service %q: unsupported lb_strategy %q", svc.Name, svc.LBStrategy))
 		}
