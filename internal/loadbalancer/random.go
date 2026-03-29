@@ -3,6 +3,7 @@ package loadbalancer
 
 import (
 	"math/rand"
+	"time"
 
 	"github.com/bharanidharansrinivasan/api-gateway/internal/registry"
 )
@@ -20,10 +21,11 @@ func NewRandom() *Random { return &Random{} }
 func (rb *Random) Next(
 	instances []*registry.Instance,
 	isSkipped func(*registry.Instance) bool,
-) (*registry.Instance, error) {
+) (*registry.Instance, func(time.Duration, bool), error) {
 	eligible := filterEligible(instances, isSkipped)
 	if len(eligible) == 0 {
-		return nil, ErrNoHealthyInstances
+		return nil, nil, ErrNoHealthyInstances
 	}
-	return eligible[rand.Intn(len(eligible))], nil
+	done := func(latency time.Duration, isErr bool) {}
+	return eligible[rand.Intn(len(eligible))], done, nil
 }

@@ -19,10 +19,18 @@ gateway:
 
 # ─── Services ────────────────────────────────────────────────────────────────
 # Each service maps to one or more upstream hosts.
-# lb_strategy: "round-robin" | "random"
+# lb_strategy: "round-robin" | "random" | "smart"
 services:
   - name: user-service
-    lb_strategy: round-robin
+    lb_strategy: smart
+    smart_routing:
+      exploration_rate: 0.10
+      max_tolerable_latency: 500ms
+      max_concurrent_requests: 100
+      weights:
+        latency: 0.4
+        errors: 0.5
+        load: 0.1
     health_check:
       path: /health
       interval: 10s

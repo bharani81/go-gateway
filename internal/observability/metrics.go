@@ -54,6 +54,10 @@ type Metrics struct {
 	ExternalPluginLatency *prometheus.HistogramVec
 	ExternalPluginErrors  *prometheus.CounterVec
 	ExternalPluginHealth  *prometheus.GaugeVec
+
+	// Smart Routing Adaptive LB
+	SmartLBInstanceScore   *prometheus.GaugeVec
+	SmartLBRoutingDecision *prometheus.CounterVec
 }
 
 // latencyBuckets matches the design document's recommended histogram buckets.
@@ -186,5 +190,15 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Name: "gateway_external_plugin_health_status",
 			Help: "External plugin health: 1=healthy, 0=unhealthy.",
 		}, []string{"plugin"}),
+
+		SmartLBInstanceScore: factory.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "gateway_smart_lb_instance_score",
+			Help: "Real-time AI normalized score [0..1] of a load balancer instance",
+		}, []string{"service", "instance"}),
+
+		SmartLBRoutingDecision: factory.NewCounterVec(prometheus.CounterOpts{
+			Name: "gateway_smart_lb_routing_decisions_total",
+			Help: "Count of routing decisions by type (explored or exploited)",
+		}, []string{"service", "instance", "type"}),
 	}
 }

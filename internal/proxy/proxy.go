@@ -85,7 +85,8 @@ func (p *ReverseProxy) ProxyRequest(
 		}
 
 		healthy := svc.HealthyInstances()
-		inst, err := lb.Next(healthy, isSkipped)
+		startRoute := time.Now()
+		inst, done, err := lb.Next(healthy, isSkipped)
 		if err != nil {
 			gwCtx.FailureReason = "no_healthy_instances"
 			if serviceCB != nil {
@@ -103,6 +104,9 @@ func (p *ReverseProxy) ProxyRequest(
 
 		if err == nil && !retryableStatusCodes[status] {
 			// Success path.
+			if done != nil {
+				done(time.Since(startRoute), false)
+			}
 			if cb, ok := instanceCBs[inst.ID]; ok {
 				cb.RecordSuccess()
 			}
@@ -110,6 +114,10 @@ func (p *ReverseProxy) ProxyRequest(
 				serviceCB.RecordSuccess()
 			}
 			return nil
+		}
+
+		if done != nil {
+			done(time.Since(startRoute), true)
 		}
 
 		// Failure path: record and decide whether to retry.

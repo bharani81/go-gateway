@@ -3,6 +3,7 @@ package loadbalancer
 
 import (
 	"sync/atomic"
+	"time"
 
 	"github.com/bharanidharansrinivasan/api-gateway/internal/registry"
 )
@@ -25,17 +26,21 @@ func NewRoundRobin() *RoundRobin {
 func (rr *RoundRobin) Next(
 	instances []*registry.Instance,
 	isSkipped func(*registry.Instance) bool,
-) (*registry.Instance, error) {
+) (*registry.Instance, func(time.Duration, bool), error) {
 	eligible := filterEligible(instances, isSkipped)
 	if len(eligible) == 0 {
-		return nil, ErrNoHealthyInstances
+		return nil, nil, ErrNoHealthyInstances
 	}
 
 	// Atomically increment and use modulo to select. This is safe for concurrent
 	// requests: each goroutine gets a unique counter value.
 	n := atomic.AddUint64(&rr.counter, 1)
 	selected := eligible[(n-1)%uint64(len(eligible))]
-	return selected, nil
+	
+	// Noop done callback for basic round-robin.
+	done := func(latency time.Duration, isErr bool) {}
+	
+	return selected, done, nil
 }
 
 // filterEligible returns the subset of instances that are healthy and not skipped.

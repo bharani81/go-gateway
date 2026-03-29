@@ -39,9 +39,10 @@ type TimeoutConfig struct {
 
 // ServiceConfig defines a logical upstream service and its instances.
 type ServiceConfig struct {
-	Name        string          `yaml:"name"`
-	LBStrategy  string          `yaml:"lb_strategy"` // round-robin | random
-	HealthCheck HealthCheckConfig `yaml:"health_check"`
+	Name         string             `yaml:"name"`
+	LBStrategy   string             `yaml:"lb_strategy"` // round-robin | random | smart
+	SmartRouting SmartRoutingConfig `yaml:"smart_routing"`
+	HealthCheck  HealthCheckConfig  `yaml:"health_check"`
 	Instances   []InstanceConfig  `yaml:"instances"`
 	Transport   TransportConfig   `yaml:"transport"`
 }
@@ -105,4 +106,16 @@ type ExternalPluginConfig struct {
 	OnError        string        `yaml:"on_error"`        // "pass" | "reject" | "circuit-break"
 	HealthPath     string        `yaml:"health_path"`     // default "/healthz"
 	HealthInterval time.Duration `yaml:"health_interval"` // default 10s
+}
+
+// SmartRoutingConfig configures the Multi-Armed Bandit load balancer parameters.
+type SmartRoutingConfig struct {
+	ExplorationRate      float64       `yaml:"exploration_rate"`
+	MaxTolerableLatency  time.Duration `yaml:"max_tolerable_latency"`
+	MaxConcurrentRequest float64       `yaml:"max_concurrent_requests"`
+	Weights              struct {
+		Latency float64 `yaml:"latency"`
+		Errors  float64 `yaml:"errors"`
+		Load    float64 `yaml:"load"`
+	} `yaml:"weights"`
 }
