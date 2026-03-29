@@ -6,9 +6,10 @@
 //   - Lazy eviction on bucket read: if the bucket hasn't been touched in evictionTTL
 //     it is treated as fresh (and the old entry deleted).
 //   - Periodic sweep goroutine catches any buckets that are never read again.
+//   - Close() stops the sweep goroutine, preventing goroutine leaks on hot reload.
 //
-// For multi-instance deployments, swap out the in-memory store for a Redis-backed
-// implementation using the same token-bucket Lua script documented in the design doc.
+// For multi-instance deployments, use the Redis-backed sliding window implementation
+// in redis.go, which shares the Limiter interface.
 package ratelimit
 
 import (
@@ -28,11 +29,14 @@ type bucket struct {
 }
 
 // TokenBucket is a concurrent, in-memory token-bucket rate limiter.
+// It implements the Limiter interface and io.Closer.
 type TokenBucket struct {
 	rate        float64 // tokens refilled per second
 	burstSize   float64 // max tokens (bucket capacity)
 	evictionTTL time.Duration
-	store       sync.Map // key string → *bucket
+	store       sync.Map  // key string → *bucket
+	stopCh      chan struct{}
+	stopOnce    sync.Once
 }
 
 // New creates a TokenBucket limiter.
@@ -43,11 +47,13 @@ func New(rate, burst float64) *TokenBucket {
 		rate:        rate,
 		burstSize:   burst,
 		evictionTTL: defaultEvictionTTL,
+		stopCh:      make(chan struct{}),
 	}
 }
 
 // StartSweep launches a background goroutine that periodically removes buckets
 // that have been inactive for longer than evictionTTL. Call this once at startup.
+// The goroutine stops when ctx is cancelled OR Close() is called — whichever comes first.
 func (tb *TokenBucket) StartSweep(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(defaultSweepInterval)
@@ -56,6 +62,8 @@ func (tb *TokenBucket) StartSweep(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
+			case <-tb.stopCh:
+				return
 			case <-ticker.C:
 				tb.sweep()
 			}
@@ -63,9 +71,16 @@ func (tb *TokenBucket) StartSweep(ctx context.Context) {
 	}()
 }
 
+// Close stops the background sweep goroutine.
+// Safe to call multiple times. Used by Chain.Close() when a runtime is retired on hot reload.
+func (tb *TokenBucket) Close() error {
+	tb.stopOnce.Do(func() { close(tb.stopCh) })
+	return nil
+}
+
 // Allow checks if the given key has sufficient tokens and consumes one if so.
 // Returns (true, remaining tokens) if allowed, (false, 0) if rejected.
-func (tb *TokenBucket) Allow(key string) (allowed bool, remaining float64) {
+func (tb *TokenBucket) allow(key string) (allowed bool, remaining float64) {
 	now := time.Now()
 
 	// Load or initialise the bucket.
@@ -97,6 +112,16 @@ func (tb *TokenBucket) Allow(key string) (allowed bool, remaining float64) {
 	}
 	b.tokens--
 	return true, b.tokens
+}
+
+// Allow implements the Limiter interface.
+// ctx is used for cancellation — if ctx is done, returns (false, 0, ctx.Err()).
+func (tb *TokenBucket) Allow(ctx context.Context, key string) (bool, float64, error) {
+	if err := ctx.Err(); err != nil {
+		return false, 0, err
+	}
+	allowed, rem := tb.allow(key)
+	return allowed, rem, nil
 }
 
 // sweep deletes buckets whose lastRefill is older than evictionTTL.

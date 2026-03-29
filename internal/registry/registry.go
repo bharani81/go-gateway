@@ -121,3 +121,15 @@ func (r *Registry) Lookup(name string) *ServiceEntry {
 	defer r.mu.RUnlock()
 	return r.services[name]
 }
+
+// ServiceNames returns a snapshot of all currently registered service names.
+// Used by the Reloader to diff removed services on hot reload.
+func (r *Registry) ServiceNames() map[string]struct{} {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	names := make(map[string]struct{}, len(r.services))
+	for name := range r.services {
+		names[name] = struct{}{}
+	}
+	return names
+}

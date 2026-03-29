@@ -4,6 +4,7 @@ package plugin
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 
 	"go.uber.org/zap"
@@ -20,6 +21,22 @@ func NewChain(plugins []Plugin, log *zap.Logger) *Chain {
 	return &Chain{plugins: plugins, log: log}
 }
 
+// Close tears down any stateful plugins in the chain that implement io.Closer.
+// Called when the GatewayRuntime version owning this chain is retired during hot reload.
+// Errors are logged but do not abort closing of remaining plugins.
+func (c *Chain) Close() {
+	for _, p := range c.plugins {
+		if closer, ok := p.(io.Closer); ok {
+			if err := closer.Close(); err != nil {
+				c.log.Warn("plugin close error",
+					zap.String("plugin", p.Name()),
+					zap.Error(err),
+				)
+			}
+		}
+	}
+}
+
 // ExecuteRequest runs all plugins' ExecuteRequest methods in order.
 //
 // Fail-fast semantics: if a plugin returns an AbortError, the error response
@@ -28,14 +45,14 @@ func NewChain(plugins []Plugin, log *zap.Logger) *Chain {
 // If a plugin panics, the panic is recovered, a 500 is written to w, and
 // the chain stops. This prevents one misbehaving plugin from crashing the server.
 //
-// Returns errAborted (non-nil) if the chain was stopped by any plugin.
+// Returns aborted=true if the chain was stopped by any plugin.
 func (c *Chain) ExecuteRequest(w http.ResponseWriter, r *http.Request) (aborted bool) {
 	for _, p := range c.plugins {
 		var err error
 		func() {
 			defer func() {
 				if rec := recover(); rec != nil {
-					err = &AbortError{StatusCode: http.StatusInternalServerError, Message: "internal server error"}
+					err = &AbortError{StatusCode: 500, Message: "internal server error"}
 					c.log.Error("plugin panicked during request",
 						zap.String("plugin", p.Name()),
 						zap.String("panic", fmt.Sprintf("%v", rec)),
@@ -53,7 +70,7 @@ func (c *Chain) ExecuteRequest(w http.ResponseWriter, r *http.Request) (aborted 
 					zap.String("plugin", p.Name()),
 					zap.Error(err),
 				)
-				writeJSONError(w, http.StatusInternalServerError, "internal server error")
+				writeJSONError(w, 500, "internal server error")
 			}
 			return true
 		}

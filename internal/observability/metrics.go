@@ -39,8 +39,21 @@ type Metrics struct {
 	RateLimitHits *prometheus.CounterVec
 
 	// Config reload metrics
-	ConfigReloads         *prometheus.CounterVec
-	ConfigReloadDuration  *prometheus.HistogramVec
+	ConfigReloads        *prometheus.CounterVec
+	ConfigReloadFailures prometheus.Counter
+	ConfigReloadDuration *prometheus.HistogramVec
+	RuntimeVersion       prometheus.Gauge
+
+	// Distributed rate limiting (Redis backend)
+	RateLimitFallbacks     prometheus.Counter
+	RateLimitRedisLatency  *prometheus.HistogramVec
+	RateLimitRejected      *prometheus.CounterVec
+	RateLimitCircuitState  *prometheus.GaugeVec
+
+	// External plugin metrics
+	ExternalPluginLatency *prometheus.HistogramVec
+	ExternalPluginErrors  *prometheus.CounterVec
+	ExternalPluginHealth  *prometheus.GaugeVec
 }
 
 // latencyBuckets matches the design document's recommended histogram buckets.
@@ -118,13 +131,60 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 
 		ConfigReloads: factory.NewCounterVec(prometheus.CounterOpts{
 			Name: "gateway_config_reload_total",
-			Help: "Config reload outcomes: success, validation_error, io_error.",
+			Help: "Config reload outcomes.",
 		}, []string{"result"}),
+
+		ConfigReloadFailures: factory.NewCounter(prometheus.CounterOpts{
+			Name: "gateway_config_reload_failures_total",
+			Help: "Total failed config reloads (runtime rebuild error).",
+		}),
 
 		ConfigReloadDuration: factory.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "gateway_config_reload_duration_seconds",
 			Help:    "Time taken to read, parse, and validate the config file.",
 			Buckets: prometheus.DefBuckets,
 		}, []string{"result"}),
+
+		RuntimeVersion: factory.NewGauge(prometheus.GaugeOpts{
+			Name: "gateway_runtime_version",
+			Help: "Monotonically increasing version of the active GatewayRuntime.",
+		}),
+
+		RateLimitFallbacks: factory.NewCounter(prometheus.CounterOpts{
+			Name: "gateway_ratelimit_redis_fallbacks_total",
+			Help: "Times the Redis rate limiter fell back to in-memory.",
+		}),
+
+		RateLimitRedisLatency: factory.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "gateway_ratelimit_redis_latency_seconds",
+			Help:    "Latency of Redis rate limit Lua script calls.",
+			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1},
+		}, []string{"route"}),
+
+		RateLimitRejected: factory.NewCounterVec(prometheus.CounterOpts{
+			Name: "gateway_ratelimit_rejected_total",
+			Help: "Requests rejected by rate limiting by backend.",
+		}, []string{"backend", "route"}),
+
+		RateLimitCircuitState: factory.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "gateway_ratelimit_redis_circuit_state",
+			Help: "Redis rate limiter circuit breaker state: 0=closed, 1=half_open, 2=open.",
+		}, []string{"addr"}),
+
+		ExternalPluginLatency: factory.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "gateway_external_plugin_latency_seconds",
+			Help:    "Latency of external plugin HTTP calls.",
+			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5},
+		}, []string{"plugin"}),
+
+		ExternalPluginErrors: factory.NewCounterVec(prometheus.CounterOpts{
+			Name: "gateway_external_plugin_errors_total",
+			Help: "External plugin call errors by reason.",
+		}, []string{"plugin", "reason"}),
+
+		ExternalPluginHealth: factory.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "gateway_external_plugin_health_status",
+			Help: "External plugin health: 1=healthy, 0=unhealthy.",
+		}, []string{"plugin"}),
 	}
 }

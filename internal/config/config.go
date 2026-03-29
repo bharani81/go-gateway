@@ -6,10 +6,11 @@ import "time"
 
 // Config is the root configuration structure loaded from gateway.yaml.
 type Config struct {
-	Gateway  GatewayConfig   `yaml:"gateway"`
-	Services []ServiceConfig `yaml:"services"`
-	Routes   []RouteConfig   `yaml:"routes"`
-	Plugins  []PluginDef     `yaml:"plugins"`
+	Gateway         GatewayConfig         `yaml:"gateway"`
+	Services        []ServiceConfig        `yaml:"services"`
+	Routes          []RouteConfig          `yaml:"routes"`
+	Plugins         []PluginDef            `yaml:"plugins"`
+	ExternalPlugins []ExternalPluginConfig `yaml:"external_plugins"`
 }
 
 // GatewayConfig holds server-level settings.
@@ -94,4 +95,14 @@ type PluginRef struct {
 type PluginDef struct {
 	Name string `yaml:"name"`
 	Type string `yaml:"type"` // e.g., "builtin.logger"
+}
+
+// ExternalPluginConfig is the per-plugin configuration for HTTP sidecar plugins.
+type ExternalPluginConfig struct {
+	Name           string        `yaml:"name"`
+	Address        string        `yaml:"address"`         // "http://localhost:8082" or "unix:///tmp/plugin.sock"
+	Timeout        time.Duration `yaml:"timeout"`         // default 50ms
+	OnError        string        `yaml:"on_error"`        // "pass" | "reject" | "circuit-break"
+	HealthPath     string        `yaml:"health_path"`     // default "/healthz"
+	HealthInterval time.Duration `yaml:"health_interval"` // default 10s
 }

@@ -5,24 +5,30 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
 )
 
 // HealthChecker runs background HTTP health checks for all registered services.
+// It supports per-service start/stop so the service registry can evolve on hot reload
+// without leaking goroutines for removed services.
 type HealthChecker struct {
 	registry *Registry
 	client   *http.Client
 	log      *zap.Logger
+	mu       sync.Mutex
+	cancels  map[string]context.CancelFunc // serviceName → cancel
 }
 
-// NewHealthChecker creates and immediately starts health checks for all services.
+// NewHealthChecker creates a HealthChecker. Call StartAll or StartForService to begin checks.
 func NewHealthChecker(reg *Registry, log *zap.Logger) *HealthChecker {
 	return &HealthChecker{
 		registry: reg,
 		client:   &http.Client{},
 		log:      log,
+		cancels:  make(map[string]context.CancelFunc),
 	}
 }
 
@@ -37,7 +43,35 @@ func (h *HealthChecker) StartAll(ctx context.Context) {
 	h.registry.mu.RUnlock()
 
 	for _, svc := range services {
-		go h.runForService(ctx, svc)
+		h.StartForService(ctx, svc)
+	}
+}
+
+// StartForService starts health checking for a single service.
+// Idempotent — if already running for this service, does nothing.
+func (h *HealthChecker) StartForService(parentCtx context.Context, svc *ServiceEntry) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if _, already := h.cancels[svc.Name]; already {
+		return // already running
+	}
+
+	svcCtx, cancel := context.WithCancel(parentCtx)
+	h.cancels[svc.Name] = cancel
+	go h.runForService(svcCtx, svc)
+}
+
+// StopForService cancels the health check goroutine for a removed service.
+// Safe to call if the service was never started.
+func (h *HealthChecker) StopForService(serviceName string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if cancel, ok := h.cancels[serviceName]; ok {
+		cancel()
+		delete(h.cancels, serviceName)
+		h.log.Info("health checker stopped for removed service", zap.String("service", serviceName))
 	}
 }
 
